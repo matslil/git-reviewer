@@ -1,0 +1,118 @@
+#!/usr/bin/python
+
+license = '''
+The MIT License (MIT)
+Copyright (c) 2014 Mats Liljegren
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+'''
+
+version = '%(prog)s 0.1'
+
+import logging
+import os
+import sys
+import argparse
+from configobj import ConfigObj, flatten_errors
+from validate import Validator
+
+def parse_arguments():
+    default_config_file = os.path.join(os.path.expanduser('~'), '.git-reviewer')
+
+    parser = argparse.ArgumentParser(description='Scan mails for patches to be reviewed.')
+    parser.add_argument('--verbose', '-v', action='count', default=0,
+                    help='be verbose, can be given multiple times for extra verbosity')
+    parser.add_argument('--log-level', default=logging.WARNING,
+                    help='set verbosity level for log entries in file given by --log-file',
+                    choices=['debug', 'info', 'warning', 'error', 'critical'])
+    parser.add_argument('--config', default=default_config_file, metavar='FILE',
+                    help='specify an alternative name for configuration FILE, default: ' + default_config_file)
+    parser.add_argument('--version', action='version', version=version)
+    arg = parser.parse_args()
+
+    return arg
+
+def create_log(arg):
+    global log
+    loglevel_verbose = {
+            0 : logging.ERROR,
+            1 : logging.WARNING,
+            2 : logging.INFO,
+            3 : logging.DEBUG
+    }
+
+    if arg.verbose > 3: arg.verbose = 3
+
+    log = logging.getLogger(__name__)
+
+    consoleHandler = logging.StreamHandler()
+    consoleHandler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
+    consoleHandler.setLevel(loglevel_verbose[arg.verbose])
+    log.addHandler(consoleHandler)
+
+    if getattr(arg, 'log_file', None) != None:
+        try:
+            fileHandler = logging.FileHandler(arg.log_file)
+        except IOError as e:
+            log.error('{}: Could not open or create log file for append: {}'.format(arg.log_file, e.strerror))
+            sys.exit(1)
+        fileHandler.setFormatter(logging.Formatter('%(asctime)s: %(levelname)s: %(message)s'))
+        fileHandler.setLevel(arg.log_level)
+        log = addHandler(fileHandler)
+
+def read_config(arg):
+    config_spec = '''
+    [repository]
+    url = string()
+
+        [[mailing-list]]
+        url = string()
+        branch.master = string()
+    '''.splitlines()
+
+    try:
+        cfg = ConfigObj(arg.config, raise_errors = True, file_error = True, encoding = 'UTF8', configspec = config_spec)
+       
+    except SyntaxError as e:
+        log.error('{}: Line {}: Column {}: Error reading configuration file: {}'.format(e.filename, e.lineno, e.offset, e.tex))
+        sys.exit(1)
+    except IOError as e:
+        if e.strerror == None:
+            log.error('{}: Could not open configuration file for reading'.format(arg.config))
+        else:
+            log.error('{}: Could not open configuration file for reading: {}'.format(arg.config, e.strerror))
+        sys.exit(1)
+
+    validation = cfg.validate(Validator())
+    if validation != True:
+        for (section_list, key, _) in flatten_errors(cfg, validation):
+            if key is not None:
+                print 'The "%s" key in the section "%s" failed validation' % (key, ', '.join(section_list))
+            else:
+                print 'The following section was missing:%s ' % ', '.join(section_list)
+        sys.exit(1)
+    return cfg
+
+def main():
+    arg = parse_arguments()
+    create_log(arg)
+    cfg = read_config(arg)    
+
+    print cfg
+
+if __name__ == "__main__":
+    main()
+
