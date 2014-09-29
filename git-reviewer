@@ -20,27 +20,37 @@ furnished to do so, subject to the following conditions:
     SOFTWARE.
 '''
 
-version = '%(prog)s 0.1'
-
 import logging
 import os
 import sys
 import argparse
+import textwrap
 from configobj import ConfigObj, flatten_errors
 from validate import Validator
 
 def parse_arguments():
     default_config_file = os.path.join(os.path.expanduser('~'), '.git-reviewer')
 
-    parser = argparse.ArgumentParser(description='Scan mails for patches to be reviewed.')
+    parser = argparse.ArgumentParser(
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+            description=
+            textwrap.dedent('''Scan mails for patches to be reviewed.
+            '''))
     parser.add_argument('--verbose', '-v', action='count', default=0,
                     help='be verbose, can be given multiple times for extra verbosity')
-    parser.add_argument('--log-level', default=logging.WARNING,
-                    help='set verbosity level for log entries in file given by --log-file',
+    parser.add_argument('--log-level', default='warning',
+            help=textwrap.dedent('''\
+                    set verbosity level for log entries in file given by --log-file
+                    default: %(default)s'''),
                     choices=['debug', 'info', 'warning', 'error', 'critical'])
+    parser.add_argument('--log-file', help='write log entries to FILE',
+            metavar='FILE')
     parser.add_argument('--config', default=default_config_file, metavar='FILE',
-                    help='specify an alternative name for configuration FILE, default: ' + default_config_file)
-    parser.add_argument('--version', action='version', version=version)
+                    help=textwrap.dedent('''\
+                        specify an alternative name for configuration FILE
+                        default: %(default)s'''))
+    parser.add_argument('--version', action='version', version='%(prog)s {}\n{}'.format(__version__, license))
+    
     arg = parser.parse_args()
 
     return arg
@@ -65,7 +75,7 @@ def create_log(arg):
 
     if getattr(arg, 'log_file', None) != None:
         try:
-            fileHandler = logging.FileHandler(arg.log_file)
+            fileHandler = logging.WatchedFileHandler(arg.log_file)
         except IOError as e:
             log.error('{}: Could not open or create log file for append: {}'.format(arg.log_file, e.strerror))
             sys.exit(1)
@@ -100,9 +110,9 @@ def read_config(arg):
     if validation != True:
         for (section_list, key, _) in flatten_errors(cfg, validation):
             if key is not None:
-                print 'The "%s" key in the section "%s" failed validation' % (key, ', '.join(section_list))
+                log.error('The "%s" key in the section "%s" failed validation' % (key, ', '.join(section_list)))
             else:
-                print 'The following section was missing:%s ' % ', '.join(section_list)
+                log.error('The following section was missing:%s ' % ', '.join(section_list))
         sys.exit(1)
     return cfg
 
@@ -114,5 +124,10 @@ def main():
     print cfg
 
 if __name__ == "__main__":
-    main()
+    try:
+        from version import __version__
+        main()
+    except KeyboardInterrupt:
+        log.error('--- Keyboard interrupt received, aborting ---')
+        sys.exit(1)
 
