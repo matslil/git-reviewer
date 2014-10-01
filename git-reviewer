@@ -21,12 +21,13 @@ furnished to do so, subject to the following conditions:
 '''
 
 import logging
+import logging.handlers
 import os
 import sys
 import argparse
 import textwrap
 from configobj import ConfigObj, flatten_errors
-from validate import Validator
+from validate import Validator, VdtValueError
 
 def parse_arguments():
     default_config_file = os.path.join(os.path.expanduser('~'), '.git-reviewer')
@@ -38,13 +39,20 @@ def parse_arguments():
             '''))
     parser.add_argument('--verbose', '-v', action='count', default=0,
                     help='be verbose, can be given multiple times for extra verbosity')
-    parser.add_argument('--log-level', default='warning',
+    parser.add_argument('--logfile', help='write log entries to FILE',
+            metavar='FILE')
+    parser.add_argument('--logfile-level', default='warning',
             help=textwrap.dedent('''\
                     set verbosity level for log entries in file given by --log-file
                     default: %(default)s'''),
                     choices=['debug', 'info', 'warning', 'error', 'critical'])
-    parser.add_argument('--log-file', help='write log entries to FILE',
-            metavar='FILE')
+    parser.add_argument('--syslog', action='store_true',
+            help='enable logging to syslog')
+    parser.add_argument('--syslog-level', metavar='LEVEL', default='error',
+            choices=['debug', 'info', 'warning', 'error', 'critical'],
+            help=textwrap.dedent('''\
+                    set verbosity level for entries to syslog, if --syslog is given
+                    default: %(default)s'''))
     parser.add_argument('--config', default=default_config_file, metavar='FILE',
                     help=textwrap.dedent('''\
                         specify an alternative name for configuration FILE
@@ -66,54 +74,70 @@ def create_log(arg):
 
     if arg.verbose > 3: arg.verbose = 3
 
-    log = logging.getLogger(__name__)
+    log = logging.getLogger(os.path.basename(__file__))
 
     consoleHandler = logging.StreamHandler()
     consoleHandler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
     consoleHandler.setLevel(loglevel_verbose[arg.verbose])
     log.addHandler(consoleHandler)
 
-    if getattr(arg, 'log_file', None) != None:
+    if getattr(arg, 'logfile', None) != None:
         try:
-            fileHandler = logging.WatchedFileHandler(arg.log_file)
+            fileHandler = logging.handlers.WatchedFileHandler(os.path.expanduser(arg.logfile))
+            fileHandler.setFormatter(logging.Formatter('%(asctime)s: %(levelname)s: %(message)s'))
+            fileHandler.setLevel(getattr(logging, arg.logfile_level.upper()))
+            log.addHandler(fileHandler)
         except IOError as e:
-            log.error('{}: Could not open or create log file for append: {}'.format(arg.log_file, e.strerror))
+            log.error('Could not open or create log file for append: {}'.format(e))
             sys.exit(1)
-        fileHandler.setFormatter(logging.Formatter('%(asctime)s: %(levelname)s: %(message)s'))
-        fileHandler.setLevel(arg.log_level)
-        log = addHandler(fileHandler)
+
+    if arg.syslog:
+        try:
+            sysHandle = logging.handlers.SysLogHandler()
+            sysHandle.setLevel(getattr(logging, arg.syslog_level.upper()))
+            log.addHandler(sysHandle)
+        except Exception as e:
+            log.error('Could not enable syslog: {}'.format(e))
 
 def read_config(arg):
     config_spec = '''
     [repository]
-    url = string()
+    url = string
 
         [[mailing-list]]
-        url = string()
-        branch.master = string()
+        url = string
+        branch.master = string
     '''.splitlines()
 
     try:
         cfg = ConfigObj(arg.config, raise_errors = True, file_error = True, encoding = 'UTF8', configspec = config_spec)
        
-    except SyntaxError as e:
-        log.error('{}: Line {}: Column {}: Error reading configuration file: {}'.format(e.filename, e.lineno, e.offset, e.tex))
-        sys.exit(1)
-    except IOError as e:
-        if e.strerror == None:
-            log.error('{}: Could not open configuration file for reading'.format(arg.config))
-        else:
-            log.error('{}: Could not open configuration file for reading: {}'.format(arg.config, e.strerror))
+    except (SyntaxError, IOError) as e:
+        log.error('{}: {}'.format(arg.config, e))
         sys.exit(1)
 
-    validation = cfg.validate(Validator())
-    if validation != True:
-        for (section_list, key, _) in flatten_errors(cfg, validation):
-            if key is not None:
-                log.error('The "%s" key in the section "%s" failed validation' % (key, ', '.join(section_list)))
+    validator = Validator()
+    validation = cfg.validate(validator, preserve_errors=True)
+    validation_error = False
+    for (section_list, key, error) in flatten_errors(cfg, validation):
+        slist = ':'.join(section_list)
+        if error == False:
+            if key is None:
+                log.error('[{}]: Mandatory section missing'.format(slist))
             else:
-                log.error('The following section was missing:%s ' % ', '.join(section_list))
-        sys.exit(1)
+                log.error('[{}] {}: Mandatory key missing'.format(slist, key))
+        elif key is not None:
+            if isinstance(error, VdtValueError):
+                log.error('[{}] {}={}: Failed validation: {}, valid value: {}'.format(', '.join(section_list), key, cfg[key], error, validation[key]))
+            else:
+                log.error('[{}] {}: Failed validation: {}'.format(', '.join(section_list), key, error))
+        else:
+            log.error('[{}]: Validation failed for unknown reason'.format(slist))
+            
+        validation_error = True
+
+    if validation_error: sys.exit(1)
+
     return cfg
 
 def main():
