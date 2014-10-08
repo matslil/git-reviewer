@@ -29,75 +29,17 @@ import textwrap
 from configobj import ConfigObj, flatten_errors
 from validate import Validator, VdtValueError
 
-def parse_arguments():
+""" Local imports """
+from lib import loglib
+
+def add_arguments(parser):
     default_config_file = os.path.join(os.path.expanduser('~'), '.git-reviewer')
 
-    parser = argparse.ArgumentParser(
-            formatter_class=argparse.RawDescriptionHelpFormatter,
-            description=
-            textwrap.dedent('''Scan mails for patches to be reviewed.
-            '''))
-    parser.add_argument('--verbose', '-v', action='count', default=0,
-                    help='be verbose, can be given multiple times for extra verbosity')
-    parser.add_argument('--logfile', help='write log entries to FILE',
-            metavar='FILE')
-    parser.add_argument('--logfile-level', default='warning',
-            help=textwrap.dedent('''\
-                    set verbosity level for log entries in file given by --log-file
-                    default: %(default)s'''),
-                    choices=['debug', 'info', 'warning', 'error', 'critical'])
-    parser.add_argument('--syslog', action='store_true',
-            help='enable logging to syslog')
-    parser.add_argument('--syslog-level', metavar='LEVEL', default='error',
-            choices=['debug', 'info', 'warning', 'error', 'critical'],
-            help=textwrap.dedent('''\
-                    set verbosity level for entries to syslog, if --syslog is given
-                    default: %(default)s'''))
     parser.add_argument('--config', default=default_config_file, metavar='FILE',
                     help=textwrap.dedent('''\
                         specify an alternative name for configuration FILE
                         default: %(default)s'''))
     parser.add_argument('--version', action='version', version='%(prog)s {}\n{}'.format(__version__, license))
-    
-    arg = parser.parse_args()
-
-    return arg
-
-def create_log(arg):
-    global log
-    loglevel_verbose = {
-            0 : logging.ERROR,
-            1 : logging.WARNING,
-            2 : logging.INFO,
-            3 : logging.DEBUG
-    }
-
-    if arg.verbose > 3: arg.verbose = 3
-
-    log = logging.getLogger(os.path.basename(__file__))
-
-    consoleHandler = logging.StreamHandler()
-    consoleHandler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
-    consoleHandler.setLevel(loglevel_verbose[arg.verbose])
-    log.addHandler(consoleHandler)
-
-    if getattr(arg, 'logfile', None) != None:
-        try:
-            fileHandler = logging.handlers.WatchedFileHandler(os.path.expanduser(arg.logfile))
-            fileHandler.setFormatter(logging.Formatter('%(asctime)s: %(levelname)s: %(message)s'))
-            fileHandler.setLevel(getattr(logging, arg.logfile_level.upper()))
-            log.addHandler(fileHandler)
-        except IOError as e:
-            log.error('Could not open or create log file for append: {}'.format(e))
-            sys.exit(1)
-
-    if arg.syslog:
-        try:
-            sysHandle = logging.handlers.SysLogHandler()
-            sysHandle.setLevel(getattr(logging, arg.syslog_level.upper()))
-            log.addHandler(sysHandle)
-        except Exception as e:
-            log.error('Could not enable syslog: {}'.format(e))
 
 def read_config(arg):
     config_spec = '''
@@ -106,6 +48,9 @@ def read_config(arg):
 
         [[mailing-list]]
         url = string
+        mailbox = string
+        user.login = string
+        user.password = string
         branch.master = string
     '''.splitlines()
 
@@ -113,7 +58,7 @@ def read_config(arg):
         cfg = ConfigObj(arg.config, raise_errors = True, file_error = True, encoding = 'UTF8', configspec = config_spec)
        
     except (SyntaxError, IOError) as e:
-        log.error('{}: {}'.format(arg.config, e))
+        log.error(e)
         sys.exit(1)
 
     validator = Validator()
@@ -141,15 +86,24 @@ def read_config(arg):
     return cfg
 
 def main():
-    arg = parse_arguments()
-    create_log(arg)
+    global log
+
+    parser = argparse.ArgumentParser(
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+            description=
+            textwrap.dedent('''Scan mails for patches to be reviewed.
+            '''))
+    add_arguments(parser)
+    loglib.add_arguments(parser)
+    arg = parser.parse_args()
+    log = loglib.configure(arg)
     cfg = read_config(arg)    
 
     print cfg
 
 if __name__ == "__main__":
     try:
-        from version import __version__
+        from lib.version import __version__
         main()
     except KeyboardInterrupt:
         log.error('--- Keyboard interrupt received, aborting ---')
