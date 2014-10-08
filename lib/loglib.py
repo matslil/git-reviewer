@@ -45,7 +45,7 @@ def add_arguments(parser):
                     default: %(default)s'''))
 
 def getLogger(module_name):
-        return logger.getLogger(appname + "." + module_name)
+        return logging.getLogger(appname + "." + module_name)
 
 def configure(arg):
 

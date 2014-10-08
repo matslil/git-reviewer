@@ -31,59 +31,10 @@ from validate import Validator, VdtValueError
 
 """ Local imports """
 from lib import loglib
+from lib import config
 
 def add_arguments(parser):
-    default_config_file = os.path.join(os.path.expanduser('~'), '.git-reviewer')
-
-    parser.add_argument('--config', default=default_config_file, metavar='FILE',
-                    help=textwrap.dedent('''\
-                        specify an alternative name for configuration FILE
-                        default: %(default)s'''))
     parser.add_argument('--version', action='version', version='%(prog)s {}\n{}'.format(__version__, license))
-
-def read_config(arg):
-    config_spec = '''
-    [repository]
-    url = string
-
-        [[mailing-list]]
-        url = string
-        mailbox = string
-        user.login = string
-        user.password = string
-        branch.master = string
-    '''.splitlines()
-
-    try:
-        cfg = ConfigObj(arg.config, raise_errors = True, file_error = True, encoding = 'UTF8', configspec = config_spec)
-       
-    except (SyntaxError, IOError) as e:
-        log.error(e)
-        sys.exit(1)
-
-    validator = Validator()
-    validation = cfg.validate(validator, preserve_errors=True)
-    validation_error = False
-    for (section_list, key, error) in flatten_errors(cfg, validation):
-        slist = ':'.join(section_list)
-        if error == False:
-            if key is None:
-                log.error('[{}]: Mandatory section missing'.format(slist))
-            else:
-                log.error('[{}] {}: Mandatory key missing'.format(slist, key))
-        elif key is not None:
-            if isinstance(error, VdtValueError):
-                log.error('[{}] {}={}: Failed validation: {}, valid value: {}'.format(', '.join(section_list), key, cfg[key], error, validation[key]))
-            else:
-                log.error('[{}] {}: Failed validation: {}'.format(', '.join(section_list), key, error))
-        else:
-            log.error('[{}]: Validation failed for unknown reason'.format(slist))
-            
-        validation_error = True
-
-    if validation_error: sys.exit(1)
-
-    return cfg
 
 def main():
     global log
@@ -95,9 +46,10 @@ def main():
             '''))
     add_arguments(parser)
     loglib.add_arguments(parser)
+    config.add_arguments(parser)
     arg = parser.parse_args()
     log = loglib.configure(arg)
-    cfg = read_config(arg)    
+    cfg = config.read(arg)
 
     print cfg
 
